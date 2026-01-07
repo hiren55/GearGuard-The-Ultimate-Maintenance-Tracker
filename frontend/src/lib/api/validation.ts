@@ -2,10 +2,11 @@ import { z } from 'zod';
 import type { RequestStatus } from '@/types';
 
 // Valid status transitions for maintenance requests
+// MUST match database trigger validate_status_transition() in migration 007
 export const VALID_STATUS_TRANSITIONS: Record<RequestStatus, RequestStatus[]> = {
   new: ['assigned', 'cancelled'],
-  assigned: ['in_progress', 'on_hold', 'cancelled'],
-  in_progress: ['on_hold', 'completed', 'cancelled'],
+  assigned: ['in_progress', 'new', 'cancelled'], // 'new' allows un-assigning
+  in_progress: ['completed', 'on_hold', 'cancelled'],
   on_hold: ['in_progress', 'cancelled'],
   completed: ['verified', 'in_progress'], // Can reopen if verification fails
   verified: [], // Terminal state

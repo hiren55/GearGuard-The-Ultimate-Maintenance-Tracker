@@ -17,47 +17,10 @@ import {
 
 const supabase = getSupabaseClient();
 
-// Result type for audit logging
-export interface AuditLogResult {
-  success: boolean;
-  error?: string;
-}
-
-// Helper function to safely log to maintenance_logs
-// Returns result so callers can optionally warn users about logging failures
-async function safeLogAction(
-  requestId: string,
-  userId: string,
-  action: string,
-  options?: {
-    fieldChanged?: string;
-    oldValue?: string;
-    newValue?: string;
-    notes?: string;
-  }
-): Promise<AuditLogResult> {
-  try {
-    const { error } = await supabase.from('maintenance_logs').insert({
-      request_id: requestId,
-      user_id: userId,
-      action,
-      field_changed: options?.fieldChanged,
-      old_value: options?.oldValue,
-      new_value: options?.newValue,
-      notes: options?.notes,
-    });
-
-    if (error) {
-      console.error('[Audit Log] Failed to log action:', action, error.message);
-      return { success: false, error: error.message };
-    }
-    return { success: true };
-  } catch (err) {
-    const errorMessage = err instanceof Error ? err.message : 'Unknown error';
-    console.error('[Audit Log] Unexpected error logging action:', action, err);
-    return { success: false, error: errorMessage };
-  }
-}
+// Note: Audit logging is handled by database triggers in migration 007:
+// - log_request_status_change() logs status, assignment, and priority changes
+// - log_request_created() logs request creation
+// We no longer need manual frontend logging to avoid duplicate entries
 
 // Fetch requests list with filters and pagination
 export async function fetchRequestList(
@@ -259,20 +222,14 @@ export async function updateRequest(
   return request;
 }
 
-// Result type for status update operations
-export interface StatusUpdateResult {
-  request: MaintenanceRequest;
-  auditLogSuccess: boolean;
-  auditLogError?: string;
-}
-
 // Update request status with transition validation
+// Note: Audit logging is handled automatically by database trigger log_request_status_change()
 export async function updateRequestStatus(
   id: string,
   newStatus: RequestStatus,
   userId: string,
   notes?: string
-): Promise<StatusUpdateResult> {
+): Promise<MaintenanceRequest> {
   // First, fetch current request to validate status transition
   const { data: currentRequest, error: fetchError } = await supabase
     .from('maintenance_requests')
@@ -323,35 +280,17 @@ export async function updateRequestStatus(
 
   if (error) throw error;
 
-  // Log the status change and return result
-  const auditResult = await safeLogAction(id, userId, 'status_changed', {
-    fieldChanged: 'status',
-    oldValue: currentStatus,
-    newValue: newStatus,
-    notes,
-  });
-
-  return {
-    request,
-    auditLogSuccess: auditResult.success,
-    auditLogError: auditResult.error,
-  };
-}
-
-// Result type for assignment operations
-export interface AssignmentResult {
-  request: MaintenanceRequest;
-  auditLogSuccess: boolean;
-  auditLogError?: string;
+  return request;
 }
 
 // Assign request to technician
+// Note: Audit logging is handled automatically by database trigger log_request_status_change()
 export async function assignRequest(
   id: string,
   assignedToId: string,
   assignedById: string,
   teamId?: string
-): Promise<AssignmentResult> {
+): Promise<MaintenanceRequest> {
   // First, validate the status transition (must be 'new' to assign)
   const { data: currentRequest, error: fetchError } = await supabase
     .from('maintenance_requests')
@@ -390,20 +329,11 @@ export async function assignRequest(
 
   if (error) throw error;
 
-  // Log the assignment and return result
-  const auditResult = await safeLogAction(id, assignedById, 'assigned', {
-    fieldChanged: 'assigned_to_id',
-    newValue: assignedToId,
-  });
-
-  return {
-    request,
-    auditLogSuccess: auditResult.success,
-    auditLogError: auditResult.error,
-  };
+  return request;
 }
 
 // Add work log
+// Note: Work notes are NOT automatically logged by database triggers, so we log manually
 export async function addWorkLog(
   requestId: string,
   userId: string,
@@ -428,18 +358,23 @@ export async function addWorkLog(
     .update(updates)
     .eq('id', requestId);
 
-  // Add log entry (non-blocking, with error handling)
-  await safeLogAction(requestId, userId, 'note_added', { notes });
-}
-
-// Result type for completion operations
-export interface CompletionResult {
-  request: MaintenanceRequest;
-  auditLogSuccess: boolean;
-  auditLogError?: string;
+  // Add log entry for work notes (this is NOT logged by triggers, so we do it manually)
+  // This may fail if user doesn't have access, but that's expected behavior
+  try {
+    await supabase.from('maintenance_logs').insert({
+      request_id: requestId,
+      user_id: userId,
+      action: 'note_added' as const,
+      notes,
+    });
+  } catch (err) {
+    console.warn('[Work Log] Failed to log work note:', err);
+    // Don't throw - the main update succeeded
+  }
 }
 
 // Complete request with resolution
+// Note: Status change is logged automatically by database trigger log_request_status_change()
 export async function completeRequest(
   id: string,
   userId: string,
@@ -447,7 +382,7 @@ export async function completeRequest(
   laborHours?: number,
   partsUsed?: string,
   actualCost?: number
-): Promise<CompletionResult> {
+): Promise<MaintenanceRequest> {
   // Validate resolution is provided
   if (!resolution || resolution.trim().length === 0) {
     throw new ApiValidationError('Resolution notes are required to complete a request');
@@ -487,19 +422,7 @@ export async function completeRequest(
 
   if (error) throw error;
 
-  // Log completion and return result
-  const auditResult = await safeLogAction(id, userId, 'completed', {
-    fieldChanged: 'status',
-    oldValue: currentStatus,
-    newValue: 'completed',
-    notes: resolution,
-  });
-
-  return {
-    request,
-    auditLogSuccess: auditResult.success,
-    auditLogError: auditResult.error,
-  };
+  return request;
 }
 
 // Fetch request logs/timeline

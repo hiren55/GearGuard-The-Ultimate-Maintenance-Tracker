@@ -509,11 +509,23 @@ export interface Database {
         Returns: string[];
       };
       get_dashboard_stats: {
-        Args: { p_team_id?: string };
+        Args: Record<PropertyKey, never>; // No parameters - see migration 011
         Returns: Json;
       };
       scrap_equipment: {
         Args: { p_equipment_id: string; p_reason: string };
+        Returns: boolean;
+      };
+      ensure_user_profile: {
+        Args: Record<PropertyKey, never>;
+        Returns: Json;
+      };
+      is_team_member: {
+        Args: { p_team_id: string };
+        Returns: boolean;
+      };
+      is_team_leader: {
+        Args: { p_team_id: string };
         Returns: boolean;
       };
     };
